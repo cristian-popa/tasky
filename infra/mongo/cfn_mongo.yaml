@@ -1,0 +1,316 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Auto Scaling Group with Self-Healing MongoDB Instance, EBS Volume, and DNS Record in Private Hosted Zone
+  
+
+Parameters:
+  
+  Environment:
+    Description: Environment to deploy in
+    Type: String
+    Default: dev
+
+  NetworkStackName:
+    Description: The network stack for cross stack references
+    Type: String
+    Default: wiz-test-vpc
+
+  ExistingVolumeId:
+    Description: "The ID of an existing EBS volume (optional). Leave empty to create a new volume."
+    Type: String
+    Default: ""
+  
+  VolumeSize:
+    Description: "Size of the EBS volume to create if ExistingVolumeId is not provided."
+    Type: Number
+    Default: 20
+    MinValue: 8
+
+  AmiId:
+    Description: The AMI ID for the instance (should be an Ubuntu AMI)
+    Type: String
+    Default: ami-0e6b0a1f7f29fa192
+
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t3.medium
+
+  KeyName:
+    Description: The EC2 Key Pair to allow SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: imply-mac
+  MetadataUpdate:
+    Description: adding a message the user data so it triggers an update
+    Type: String
+    Default: changemeifyouwant to trigger metadata refresh
+
+
+  # We have to deal with the fact we can't use intrinsic function in params so we'd have to hard code defaults for the primary mongo zone template. 
+  # In case of fail over we can redeploy the same template with slightly various defaults. This could be done via saving a aws cli with the new params for zone 2
+
+  PrivateSubnetId:
+    Description: The subnet where mongodb will be deployed in
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-00f117d708c4dd1c2
+
+  #it's annoying this is so redundant with cross stack references
+  
+  AZ:
+    Description: The AZ to deploy the instance in 
+    Type: String
+    Default: us-east-1a
+
+  PrivateHostedZoneId:
+    Description: The hosted zone id to register the mongo server dns record
+    Type: AWS::Route53::HostedZone::Id
+    Default: Z01355941NLFI0RDPS5PY
+
+  VPCId:
+    Description: The ID of the VPC where resources will be deployed
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-040f0432a22d79819
+
+Conditions:
+  CreateNewVolume: !Equals [!Ref ExistingVolumeId, ""]
+
+Resources:
+  BackupBucket:
+    Type: 'AWS::S3::Bucket'
+
+  InstanceProfileRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      Path: /
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: 
+        - !Ref InstanceProfileRole
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH access and MongoDB ports
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 27017
+          ToPort: 27017
+          CidrIp: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: MongoDBSecurityGroup
+
+  MongoDataVolume:
+    Type: AWS::EC2::Volume
+    Condition: CreateNewVolume
+    Properties:
+      AvailabilityZone: !Ref AZ
+      Size: !Ref VolumeSize
+      VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: MongoDBDataVolume
+  MongoLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          files:
+            /etc/systemd/system/cfn-hup.service:
+              content: !Sub |
+                [Unit]
+                Description=cfn-hup daemon
+                After=network.target
+
+                [Service]
+                Type=simple
+                ExecStart=/usr/local/bin/cfn-hup
+                Restart=always
+
+                [Install]
+                WantedBy=multi-user.target
+              mode: '000644'
+              owner: root
+              group: root
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack=${AWS::StackName}
+                region=${AWS::Region}
+                interval=5
+              mode: '000400'
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.MongoLaunchTemplate.Metadata.AWS::CloudFormation::Init
+                action=/usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource MongoLaunchTemplate --region ${AWS::Region}
+                runas=root
+              mode: '000400'
+              owner: root
+              group: root
+            /data/backup/backup.sh:
+              content: !Sub |
+                #!/bin/bash
+                # Secure temporary directory
+                backup_dir=$(mktemp -d)
+                backup_name=$(date '+go-mongodb-%F-%H-%M-%S.tar.gz')
+                #perform backup securely
+                echo $(aws ssm get-parameter --name "/wiz/${Environment}/mongouserpwd" --with-decryption --region ${AWS::Region} --query Parameter.Value --output text) | mongodump --uri="mongodb://appuser@localhost/go-mongodb" --archive="$backup_dir/go-mongodb.archive" && \
+                tar -czvf "$backup_name" -C "$backup_dir" . && \
+                rm -r "$backup_dir"
+                # Upload to S3
+                aws s3 cp "$backup_name" s3://${BackupBucket}/${Environment}/$backup_name && rm "$backup_name"
+              mode: '000700'
+              owner: root
+              group: root     
+            /data/backup/startcron: 
+              content: |
+                0 * * * *  /data/backup/backup.sh
+              mode: '000700'
+              owner: root
+              group: root  
+          commands:
+            enable_cfn_hup:
+              command: |
+                systemctl daemon-reload
+                systemctl enable cfn-hup.service
+                systemctl start cfn-hup.service
+            setupcron:
+              command:
+                crontab startcron
+              cwd:
+                /data/backup
+    
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        IamInstanceProfile:
+          Name: !Ref InstanceProfile
+        SecurityGroupIds:
+          - !Ref InstanceSecurityGroup
+        #Can be improved to move most of this stuff under more nicely cfn::init declarative functions
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            curl https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb -O
+            sudo dpkg -i -E ./amazon-cloudwatch-agent.deb
+            apt-get update -y
+            apt-get install -y gnupg lvm2 zip python3-pip
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            curl "https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz" -o aws-cfn-bootstrap-py3-latest.tar.gz
+            unzip awscliv2.zip
+            ./aws/install
+            pip install aws-cfn-bootstrap-py3-latest.tar.gz
+            rm /etc/init.d/cfn-hup
+            ln -s /usr/local/bin/cfn-hup /etc/init.d/cfn-hup
+
+
+            wget -qO - https://www.mongodb.org/static/pgp/server-4.4.asc | sudo apt-key add -
+            echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/4.4 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-4.4.list
+            apt-get update -y
+            apt-get install -y mongodb-org
+
+            INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+            VOLUME_ID=$(aws ec2 describe-volumes --filters Name=tag:Name,Values=MongoDBDataVolume Name=availability-zone,Values=${AZ} --query 'Volumes[*].VolumeId' --region ${AWS::Region} --output text)
+            aws ec2 attach-volume --volume-id $VOLUME_ID --instance-id $INSTANCE_ID --device /dev/sdf --region ${AWS::Region}
+
+            sleep 10
+
+            mkdir -p /data
+            mkfs -t xfs /dev/nvme1n1
+            mount /dev/nvme1n1 /data
+            chown -R mongodb:mongodb /data
+
+            sudo sed -i 's|dbPath: /var/lib/mongodb|dbPath: /data|g' /etc/mongod.conf
+            echo "nvme1n1 /data xfs defaults,nofail 0 2" | sudo tee -a /etc/fstab
+
+            date
+            echo starting mongo services
+            sudo systemctl start mongod
+            sudo systemctl enable mongod
+
+
+            #wait for mongo services to start
+            sleep 10
+            
+
+            if [[  "${ExistingVolumeId}x"=="x" ]];then
+
+              mongo <<EOF
+              use admin
+              db.createUser({ user: "admin", pwd: "$(aws ssm get-parameter --name "/wiz/${Environment}/mongoadminpwd"  --with-decryption --region ${AWS::Region} --query Parameter.Value --output text)", roles: [{ role: "userAdminAnyDatabase", db: "admin" }] })
+              use go-mongodb
+              db.createUser({ user: "appuser", pwd: "$(aws ssm get-parameter --name "/wiz/${Environment}/mongouserpwd"  --with-decryption --region ${AWS::Region} --query Parameter.Value --output text)", roles: [{ role: "dbOwner", db: "go-mongodb" }] })
+            EOF
+              
+            fi
+
+            #Configure mongo in auth mode if not configured already
+
+            grep -q 'authorization: enabled' /etc/mongod.conf || cat << EOF >> /etc/mongod.conf
+            security:
+              authorization: enabled
+            EOF
+
+            systemctl stop mongod
+            systemctl start mongod
+
+            PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+            HOSTED_ZONE_ID=${PrivateHostedZoneId}
+
+            aws route53 change-resource-record-sets --hosted-zone-id $HOSTED_ZONE_ID --change-batch '{
+                "Comment": "Upsert record for MongoDB instance",
+                "Changes": [
+                    {
+                        "Action": "UPSERT",
+                        "ResourceRecordSet": {
+                            "Name": "mongodb.wiz.sandbox.", 
+                            "Type": "A",
+                            "TTL": 300,
+                            "ResourceRecords": [{ "Value": "'$PRIVATE_IP'" }]
+                        }
+                    }
+                ]
+            }' --region ${AWS::Region}
+            
+
+            cfn-init -v --stack ${AWS::StackId} --resource MongoLaunchTemplate --region ${AWS::Region}
+            cfn-signal -e $? --stack ${AWS::StackId} --resource AutoScalingGroup --region ${AWS::Region}
+            echo "Completed Succesfully!!! ${MetadataUpdate}"
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetId
+      LaunchTemplate: 
+        LaunchTemplateId: !Ref MongoLaunchTemplate
+        Version: !GetAtt MongoLaunchTemplate.LatestVersionNumber
+      MinSize: '1'
+      MaxSize: '1'
+      DesiredCapacity: '1'
+      Tags:
+        - Key: Name
+          Value: MongoDBInstance
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal: 
+        Count: 1
+        Timeout: PT120M
+

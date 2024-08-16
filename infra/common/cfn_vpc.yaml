@@ -1,0 +1,297 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VPC with 2 Public and 2 Private Subnets and only one NAT GW for cost savings
+
+Resources:
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: 
+        - Key: Name
+          Value: WizTesTVpc
+
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties: 
+      Tags:
+        - Key: Name
+          Value: MyInternetGateway
+
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: 
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties: 
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: 
+        - Key: Name
+          Value: PublicSubnet1
+
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties: 
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: 
+        - Key: Name
+          Value: PublicSubnet2
+
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties: 
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: 
+        - Key: Name
+          Value: PrivateSubnet1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties: 
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: 
+        - Key: Name
+          Value: PrivateSubnet2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+ 
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  #typically we want 2 of these in a prod like scenario but for this demo only one is ok
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      AllocationId: !GetAtt ElasticIP.AllocationId
+      Tags:
+        - Key: Name
+          Value: NatGateway
+
+
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PrivateRouteTable
+
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+ 
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateHostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: 'wiz.sandbox'
+      VPCs:
+        - VPCId: !Ref VPC
+          VPCRegion: !Ref AWS::Region
+      HostedZoneConfig:
+        Comment: Private hosted zone for my VPC
+
+
+  CleanUpHostedZoneFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+
+          def delete_records(hosted_zone_id):
+              client = boto3.client('route53')
+              
+              paginator = client.get_paginator('list_resource_record_sets')
+              record_sets = paginator.paginate(HostedZoneId=hosted_zone_id)
+              
+              changes = []
+              
+              for record_set in record_sets:
+                  for record in record_set['ResourceRecordSets']:
+                      if record['Type'] not in ['NS', 'SOA']:
+                          changes.append({
+                              'Action': 'DELETE',
+                              'ResourceRecordSet': record
+                          })
+              
+              if changes:
+                  client.change_resource_record_sets(
+                      HostedZoneId=hosted_zone_id,
+                      ChangeBatch={'Changes': changes}
+                  )
+
+          def lambda_handler(event, context):
+              print(f"Received event: {json.dumps(event)}")
+              
+              try:
+                  hosted_zone_id = event['ResourceProperties']['HostedZoneId']
+                  
+                  if event['RequestType'] == 'Delete':
+                      delete_records(hosted_zone_id)
+                  
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+  
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CleanupHostedZonePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - route53:ListResourceRecordSets
+                  - route53:ChangeResourceRecordSets
+                Resource: "*"
+
+  CleanUpHostedZone:
+    Type: Custom::CleanUpHostedZone
+    Properties:
+      ServiceToken: !GetAtt CleanUpHostedZoneFunction.Arn
+      HostedZoneId: !Ref PrivateHostedZone
+
+
+
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: 
+        'Fn::Sub': '${AWS::StackName}-VPC'
+  PublicSubnet1:
+    Description: Public Subnet 1 ID
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: 
+        'Fn::Sub': '${AWS::StackName}-PublicSubnet1'
+  PublicSubnet2:
+    Description: Public Subnet 2 ID
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: 
+        'Fn::Sub': '${AWS::StackName}-PublicSubnet2'
+  PrivateSubnet1:
+    Description: The ID of the first private subnet
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet1"
+
+  PrivateSubnet1AZ:
+    Description: The AZ of the first private subnet
+    Value: !GetAtt PrivateSubnet1.AvailabilityZone
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet1AZ"
+
+  PrivateSubnet2:
+    Description: The ID of the second private subnet
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet2"
+
+  PrivateSubnet2AZ:
+    Description: The AZ of the second private subnet
+    Value: !GetAtt PrivateSubnet2.AvailabilityZone
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet2AZ"
+  
+  PrivateHostedZoneId:
+    Description: The ID of the private hosted zone
+    Value: !Ref PrivateHostedZone
+    Export:
+      Name: 
+        'Fn::Sub': '${AWS::StackName}-PrivateHostedZoneId'
+
+
+  
