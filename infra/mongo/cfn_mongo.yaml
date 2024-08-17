@@ -51,7 +51,7 @@ Parameters:
   PrivateSubnetId:
     Description: The subnet where mongodb will be deployed in
     Type: AWS::EC2::Subnet::Id
-    Default: subnet-00f117d708c4dd1c2
+    Default: subnet-07686cdb369478f1f
 
   #it's annoying this is so redundant with cross stack references
   
@@ -63,12 +63,13 @@ Parameters:
   PrivateHostedZoneId:
     Description: The hosted zone id to register the mongo server dns record
     Type: AWS::Route53::HostedZone::Id
-    Default: Z01355941NLFI0RDPS5PY
+    Default: Z06221451MIRQZOF44T6J
 
   VPCId:
     Description: The ID of the VPC where resources will be deployed
     Type: AWS::EC2::VPC::Id
-    Default: vpc-040f0432a22d79819
+    Default: vpc-0a5c0ac955cba9644
+
 
 Conditions:
   CreateNewVolume: !Equals [!Ref ExistingVolumeId, ""]
@@ -182,7 +183,39 @@ Resources:
                 0 * * * *  /data/backup/backup.sh
               mode: '000700'
               owner: root
-              group: root  
+              group: root
+            /etc/mongod.conf:
+              content: |
+                storage:
+                  dbPath: /data
+                  journal:
+                    enabled: true
+                systemLog:
+                  destination: file
+                  logAppend: true
+                  path: /data/log/mongod.log
+                net:
+                  port: 27017
+                  bindIp: 0.0.0.0
+                processManagement:
+                  timeZoneInfo: /usr/share/zoneinfo
+                security:
+                  authorization: enabled
+                #modify to restart service
+            /data/log/mongod.log:
+              content: |
+                #MONGOLOG
+              mode: '000600'
+              owner: mongodb
+              group: mongodb
+
+          services:
+            systemd:
+              mongod:
+                enabled: "true"
+                ensureRunning: "true"
+                files: 
+                  - /etc/mongod.conf
           commands:
             enable_cfn_hup:
               command: |
@@ -261,16 +294,6 @@ Resources:
               
             fi
 
-            #Configure mongo in auth mode if not configured already
-
-            grep -q 'authorization: enabled' /etc/mongod.conf || cat << EOF >> /etc/mongod.conf
-            security:
-              authorization: enabled
-            EOF
-
-            systemctl stop mongod
-            systemctl start mongod
-
             PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
             HOSTED_ZONE_ID=${PrivateHostedZoneId}
 
@@ -289,7 +312,6 @@ Resources:
                 ]
             }' --region ${AWS::Region}
             
-
             cfn-init -v --stack ${AWS::StackId} --resource MongoLaunchTemplate --region ${AWS::Region}
             cfn-signal -e $? --stack ${AWS::StackId} --resource AutoScalingGroup --region ${AWS::Region}
             echo "Completed Succesfully!!! ${MetadataUpdate}"
@@ -313,4 +335,15 @@ Resources:
       ResourceSignal: 
         Count: 1
         Timeout: PT120M
+
+
+
+
+
+
+
+
+
+
+
 

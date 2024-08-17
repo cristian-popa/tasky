@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tasky-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tasky
+  template:
+    metadata:
+      labels:
+        app: tasky
+    spec:
+      containers:
+      - name: tasky-container
+        image: cristianpopa/tasky:v1
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MONGODB_URI
+          valueFrom:
+            secretKeyRef:
+              name: mongouri
+              key: MONGODB_URI
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: secretkey
+              key: SECRET_KEY
+        resources:
+          requests:
+            memory: "256Mi"  
+            cpu: "250m"     
+          limits:
+            memory: "512Mi"  
+            cpu: "500m"     
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tasky-service
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "alb" 
+spec:
+  selector:
+    app: tasky
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+  type: LoadBalancer
