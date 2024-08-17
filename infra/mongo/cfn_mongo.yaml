@@ -170,17 +170,18 @@ Resources:
                 backup_dir=$(mktemp -d)
                 backup_name=$(date '+go-mongodb-%F-%H-%M-%S.tar.gz')
                 #perform backup securely
-                echo $(aws ssm get-parameter --name "/wiz/${Environment}/mongouserpwd" --with-decryption --region ${AWS::Region} --query Parameter.Value --output text) | mongodump --uri="mongodb://appuser@localhost/go-mongodb" --archive="$backup_dir/go-mongodb.archive" && \
+                echo $(/usr/local/bin/aws ssm get-parameter --name "/wiz/${Environment}/mongouserpwd" --with-decryption --region ${AWS::Region} --query Parameter.Value --output text) | mongodump --uri="mongodb://appuser@localhost/go-mongodb" --archive="$backup_dir/go-mongodb.archive" && \
                 tar -czvf "$backup_name" -C "$backup_dir" . && \
                 rm -r "$backup_dir"
                 # Upload to S3
-                aws s3 cp "$backup_name" s3://${BackupBucket}/${Environment}/$backup_name && rm "$backup_name"
+                /usr/local/bin/aws s3 cp "$backup_name" s3://${BackupBucket}/${Environment}/$backup_name && rm "$backup_name"
               mode: '000700'
               owner: root
               group: root     
             /data/backup/startcron: 
-              content: |
-                0 * * * *  /data/backup/backup.sh
+              content: !Sub | 
+                #${MetadataUpdate}
+                */5 * * * * SHELL=/bin/bash /data/backup/backup.sh >> /data/backup/cron.log 2>&1
               mode: '000700'
               owner: root
               group: root
