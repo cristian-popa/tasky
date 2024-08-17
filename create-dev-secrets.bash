@@ -1,3 +1,3 @@
 #!/bin/bash
-echo "mongodb://appuser:$(aws ssm get-parameter --name "/wiz/dev/mongouserpwd" --with-decryption --query "Parameter.Value" --output text --region us-east-1 --profile cpopaadmin)@mongodb.wiz.sandbox" | kubectl create secret generic mongouri --from-file=MONGODB_URI=/dev/stdin 
+echo "mongodb://appuser:$(aws ssm get-parameter --name "/wiz/dev/mongouserpwd" --with-decryption --query "Parameter.Value" --output text --region us-east-1 --profile cpopaadmin)@mongodb.wiz.sandbox/go-mongodb" | kubectl create secret generic mongouri --from-file=MONGODB_URI=/dev/stdin 
 echo "$(aws ssm get-parameter --name "/wiz/dev/secret_key" --with-decryption --query "Parameter.Value" --output text --region us-east-1 --profile cpopaadmin)" | kubectl create secret generic secretkey --from-file=SECRET_KEY=/dev/stdin

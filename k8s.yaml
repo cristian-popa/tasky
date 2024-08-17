@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: tasky-container
-        image: cristianpopa/tasky:v1
+        image: cristianpopa/tasky:v4
         ports:
         - containerPort: 8080
         env:

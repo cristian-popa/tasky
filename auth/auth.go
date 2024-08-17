@@ -4,7 +4,8 @@ import (
 	"net/http"
 	"os"
 	"time"
-
+    "strings"
+	
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gin-gonic/gin"
 )
@@ -13,7 +14,8 @@ type Claims struct {
 	Username string `json:"username"`
 	jwt.StandardClaims
 }
-var SECRET_KEY string = os.Getenv("SECRET_KEY")
+
+var SECRET_KEY string = strings.TrimRight(os.Getenv("SECRET_KEY"), "\r\n")
 
 func ValidateSession(c * gin.Context) (bool){
 	cookie, err := c.Cookie("token")
