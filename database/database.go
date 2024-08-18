@@ -16,7 +16,7 @@ var Client *mongo.Client = CreateMongoClient()
 
 func CreateMongoClient() *mongo.Client {
 	godotenv.Overload()
-	MongoDbURI := strings.TrimRight(os.Getenv("MONGODB_URI"), "\r\n")
+	MongoDbURI := os.Getenv("MONGODB_URI")
 	client, err := mongo.NewClient(options.Client().ApplyURI(MongoDbURI))
 	if err != nil {
 		log.Fatal(err)

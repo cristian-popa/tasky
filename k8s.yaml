@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: tasky-deployment
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: tasky
@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: tasky-container
-        image: cristianpopa/tasky:v4
+        image: cristianpopa/tasky:v5
         ports:
         - containerPort: 8080
         env:
@@ -40,8 +40,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: tasky-service
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: "alb" 
+
 spec:
   selector:
     app: tasky
@@ -49,4 +48,31 @@ spec:
   - protocol: TCP
     port: 80
     targetPort: 8080
-  type: LoadBalancer
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tasky
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/subnets: subnet-027293b049f307454,subnet-0b3b9b54529ae6ace
+    alb.ingress.kubernetes.io/backend-protocol: HTTP
+    alb.ingress.kubernetes.io/listen-ports:  '[{"HTTPS": 443}]'
+
+spec:
+  ingressClassName: alb
+  tls: 
+  - hosts:
+    - tasky.cipopa.com
+  rules:
+    - http:
+        paths:
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: tasky-service
+              port:
+                number: 80

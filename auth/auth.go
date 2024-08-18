@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
     "strings"
-	
+
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gin-gonic/gin"
 )
@@ -15,7 +15,7 @@ type Claims struct {
 	jwt.StandardClaims
 }
 
-var SECRET_KEY string = strings.TrimRight(os.Getenv("SECRET_KEY"), "\r\n")
+var SECRET_KEY string = os.Getenv("SECRET_KEY")
 
 func ValidateSession(c * gin.Context) (bool){
 	cookie, err := c.Cookie("token")

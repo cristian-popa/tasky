@@ -272,7 +272,7 @@ Resources:
             chown -R mongodb:mongodb /data
 
             sudo sed -i 's|dbPath: /var/lib/mongodb|dbPath: /data|g' /etc/mongod.conf
-            echo "nvme1n1 /data xfs defaults,nofail 0 2" | sudo tee -a /etc/fstab
+            echo "nvme1n1 /data xfs defaults,nofail 0 2" | tee -a /etc/fstab
 
             date
             echo starting mongo services
@@ -295,7 +295,11 @@ Resources:
               
             fi
 
-            PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+            #leverage instance metadata v2
+            
+            TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+            PRIVATE_IP=$(curl  -H "X-aws-ec2-metadata-token: $TOKEN"  http://169.254.169.254/latest/meta-data/local-ipv4 2>/dev/null)
+
             HOSTED_ZONE_ID=${PrivateHostedZoneId}
 
             aws route53 change-resource-record-sets --hosted-zone-id $HOSTED_ZONE_ID --change-batch '{
