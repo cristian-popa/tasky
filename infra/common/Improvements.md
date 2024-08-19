@@ -14,7 +14,10 @@
 11. Modify tasky and use aws go sdk to fetch secrets directly from ssm param store, add a role to the pod to allow read the required parameters from param store, as well as access to the decryption key used to encrypt the secrets. This way passwords are not exposed within the container, they'd be only in memory
 12. Setup private endpoints for aws services such as s3, parameter store , ec2 apis etc. 
 13. Run a private eks cluster
-14. Deploy a security tool and fix any other findings it may have
+15. Deploy cloudfront and protect the origin via adjusting the security group to only allow CF POP ips or custom headers. CSet cache headers for the /assets web path
+16. Deploy a WAF to protect against well known attacks
+17. Enable ALB request and connection logging - done!
+18. Enable security / compliance tools (inspector/config) or third party tools to scan for security issues and compliance
 
 ## Automation resilience related
 1. Understand what can be done so that pods don't cache the dns response  (in case mongo changes its ip)
@@ -28,9 +31,7 @@
 
 
 
-## Seting up load balancer controller
 
-[https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/deploy/installation/](https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/deploy/installation/) 
 
 
 
