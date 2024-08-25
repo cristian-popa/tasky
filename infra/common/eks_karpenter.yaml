@@ -15,7 +15,7 @@ Parameters:
   SubnetIds:
     Description: List of Subnet IDs for the EKS Cluster
     Type: List<AWS::EC2::Subnet::Id>
-    Default: "subnet-0e976a87d4895c04b,subnet-027293b049f307454"
+    Default: "subnet-0e976a87d4895c04b,subnet-07686cdb369478f1f"
 
 
   NodeInstanceType:
@@ -55,11 +55,12 @@ Resources:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSServicePolicy
         - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEKSVPCResourceController
 
+
   NodeGroup:
     Type: AWS::EKS::Nodegroup
     Properties:
       ClusterName: !Ref EKSCluster
-      NodegroupName: !Sub "${ClusterName}-node-group"
+      NodegroupName: !Sub "${ClusterName}-main-nodegroup"
       Subnets: !Ref SubnetIds
       NodeRole: !GetAtt KarpenterNodeRole.Arn
       InstanceTypes: 
@@ -70,6 +71,7 @@ Resources:
         DesiredSize: 1
       DiskSize: 20
       AmiType: AL2_x86_64
+
 
   EKSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
